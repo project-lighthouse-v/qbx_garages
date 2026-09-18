@@ -9,7 +9,7 @@ return {
     drawDropOffMarker = function(coords, radius)
         local size = (radius or 1.5) * 2
         local baseSize = 3.0
-        local baseOffset = 2.9
+        local baseOffset = 2.8
         local zOffset = baseOffset
         local hasWater, waterZ = GetWaterHeight(coords.x, coords.y, coords.z)
         local hasNoWaves, waterZNoWaves = GetWaterHeightNoWaves(coords.x, coords.y, coords.z)
@@ -30,6 +30,6 @@ return {
         local baseSize = 2.0
         local baseOffset = 2.3
         local zOffset = baseOffset
-        DrawMarker(0, coords.x, coords.y, coords.z - zOffset, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, size, size, baseSize, 20, 246, 12, 255, false, false, 0, false, nil, nil, false)
+        DrawMarker(0, coords.x, coords.y, coords.z - zOffset, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, size, size, baseSize, 20, 246, 12, 255, false, false, 0, true, nil, nil, false)
     end,
 }
