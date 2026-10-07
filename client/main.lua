@@ -22,23 +22,43 @@ local function getProgressColor(percent)
 end
 
 local VehicleCategory = {
-    all = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22},
-    car = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 17, 18, 19, 20, 22},
-    air = {15, 16},
-    sea = {14},
+	all = {
+		[0] = true, [1] = true, [2] = true, [3] = true, [4] = true, [5] = true,
+		[6] = true, [7] = true, [8] = true, [9] = true, [10] = true, [11] = true,
+		[12] = true, [13] = true, [14] = true, [15] = true, [16] = true, [17] = true,
+		[18] = true, [19] = true, [20] = true, [21] = true, [22] = true,
+	},
+	car = {
+		[0] = true,
+		[1] = true,
+		[2] = true,
+		[3] = true,
+		[4] = true,
+		[5] = true,
+		[6] = true,
+		[7] = true,
+		[8] = true,
+		[9] = true,
+		[10] = true,
+		[11] = true,
+		[12] = true,
+		[13] = true,
+		[17] = true,
+		[18] = true,
+		[19] = true,
+		[20] = true,
+		[22] = true,
+	},
+	air = { [15] = true, [16] = true },
+	sea = { [14] = true },
 }
 
 ---@param category VehicleType
 ---@param vehicle number
 ---@return boolean
 local function isOfType(category, vehicle)
-    local classSet = {}
-
-    for _, class in pairs(VehicleCategory[category]) do
-        classSet[class] = true
-    end
-
-    return classSet[GetVehicleClass(vehicle)] == true
+	local classes = VehicleCategory[category]
+	return classes ~= nil and classes[GetVehicleClass(vehicle)] == true
 end
 
 ---@param vehicle number
@@ -232,8 +252,10 @@ local function parkVehicle(vehicle, garageName)
         kickOutPeds(vehicle)
         SetVehicleDoorsLocked(vehicle, 2)
         Wait(1500)
-        lib.callback.await('qbx_garages:server:parkVehicle', false, NetworkGetNetworkIdFromEntity(vehicle), lib.getVehicleProperties(vehicle), garageName)
-        exports.qbx_core:Notify(locale('success.vehicle_parked'), 'primary', 4500)
+        local parked = lib.callback.await('qbx_garages:server:parkVehicle', false, NetworkGetNetworkIdFromEntity(vehicle), lib.getVehicleProperties(vehicle), garageName)
+        if parked then
+            exports.qbx_core:Notify(locale('success.vehicle_parked'), 'primary', 4500)
+        end
     else
         exports.qbx_core:Notify(locale('error.vehicle_occupied'), 'error', 3500)
     end
@@ -253,6 +275,13 @@ local function checkCanAccess(garage)
     return true
 end
 
+local activeRadialItems = {}
+
+AddEventHandler('onResourceStop', function(resource)
+    if resource ~= cache.resource then return end
+    for id in pairs(activeRadialItems) do lib.removeRadialItem(id) end
+end)
+
 ---@param garageName string
 ---@param garage GarageConfig
 ---@param accessPoint AccessPoint
@@ -265,56 +294,81 @@ local function createZones(garageName, garage, accessPoint, accessPointIndex)
         local useRadius = accessPoint.useRadius or 1
         local dropUseRadius = accessPoint.dropUseRadius or 1.5
         local dropZone, coordsZone
+        local useRadial = config.interact == 'radialmenu'
+
+        local function createInteractionZone(coords, radius, isDrop)
+            local id = ('qbx_garages:%s:%s:%s'):format(garageName, accessPointIndex, isDrop and 'drop' or 'menu')
+            local shownAction
+
+            local function getAction()
+                if useRadial and not LocalPlayer.state.isLoggedIn then return end
+                if isDrop then return cache.vehicle and 'park' or nil end
+                if accessPoint.dropPoint and cache.vehicle then return end
+                return garage.type == GarageType.DEPOT and 'impound' or cache.vehicle and 'park' or 'car'
+            end
+
+            local function selectAction()
+                if #(GetEntityCoords(cache.ped) - vec3(coords.x, coords.y, coords.z)) > radius then return end
+                local action = getAction()
+                if not action or not checkCanAccess(garage) then return end
+                if action == 'park' then
+                    parkVehicle(cache.vehicle, garageName)
+                else
+                    openGarageMenu(garageName, garage, accessPointIndex)
+                end
+            end
+
+            local function clearInteraction()
+                if useRadial then
+                    lib.removeRadialItem(id)
+                    activeRadialItems[id] = nil
+                elseif shownAction then
+                    lib.hideTextUI()
+                end
+                shownAction = nil
+            end
+
+            local function updateInteraction()
+                local action = getAction()
+                if action == shownAction then return end
+                clearInteraction()
+                shownAction = action
+                if not action then return end
+                if useRadial then
+                    activeRadialItems[id] = true
+                    lib.addRadialItem({
+                        id = id,
+                        label = locale('info.' .. action .. '_radial'),
+                        icon = action == 'park' and 'square-parking' or 'warehouse',
+                        onSelect = selectAction,
+                    })
+                else
+                    lib.showTextUI(locale('info.' .. action .. '_e'))
+                end
+            end
+
+            return lib.zones.sphere({
+                coords = coords,
+                radius = radius,
+                onEnter = updateInteraction,
+                onExit = clearInteraction,
+                inside = function()
+                    updateInteraction()
+                    if not useRadial and IsControlJustReleased(0, 38) then selectAction() end
+                end,
+                debug = config.debugPoly,
+            })
+        end
+
         local function createDropZone()
             if dropZone then return end
-            dropZone = lib.zones.sphere({
-                coords = accessPoint.dropPoint,
-                radius = dropUseRadius,
-                onEnter = function()
-                    if not cache.vehicle then return end
-                    lib.showTextUI(locale('info.park_e'))
-                end,
-                onExit = function()
-                    lib.hideTextUI()
-                end,
-                inside = function()
-                    if not cache.vehicle then return end
-                    if IsControlJustReleased(0, 38) then
-                        if not checkCanAccess(garage) then return end
-                        parkVehicle(cache.vehicle, garageName)
-                    end
-                end,
-                debug = config.debugPoly
-            })
+            dropZone = createInteractionZone(accessPoint.dropPoint, dropUseRadius, true)
         end
 
         local function createCoordsZone()
             if coordsZone then return end
-            coordsZone = lib.zones.sphere({
-                coords = accessPoint.coords,
-                radius = useRadius,
-                onEnter = function()
-                    if accessPoint.dropPoint and cache.vehicle then return end
-                    lib.showTextUI((garage.type == GarageType.DEPOT and locale('info.impound_e')) or (cache.vehicle and locale('info.park_e')) or locale('info.car_e'))
-                end,
-                onExit = function()
-                    lib.hideTextUI()
-                end,
-                inside = function()
-                    if accessPoint.dropPoint and cache.vehicle then return end
-                    if IsControlJustReleased(0, 38) then
-                        if not checkCanAccess(garage) then return end
-                        if cache.vehicle and garage.type ~= GarageType.DEPOT then
-                            parkVehicle(cache.vehicle, garageName)
-                        else
-                            openGarageMenu(garageName, garage, accessPointIndex)
-                        end
-                    end
-                end,
-                debug = config.debugPoly
-            })
+            coordsZone = createInteractionZone(accessPoint.coords, useRadius, false)
         end
-
         lib.zones.sphere({
             coords = accessPoint.coords,
             radius = drawRadius,
@@ -323,6 +377,7 @@ local function createZones(garageName, garage, accessPoint, accessPointIndex)
             end,
             onExit = function()
                 if coordsZone then
+                    coordsZone.onExit()
                     coordsZone:remove()
                     coordsZone = nil
                 end
@@ -342,6 +397,7 @@ local function createZones(garageName, garage, accessPoint, accessPointIndex)
                 end,
                 onExit = function()
                     if dropZone then
+                        dropZone.onExit()
                         dropZone:remove()
                         dropZone = nil
                     end
